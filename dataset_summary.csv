@@ -1,0 +1,4 @@
+split,accounts,human_accounts,bot_accounts,total_tweets,rewritten_bot_tweets
+train,4967,2179,2788,837393,218074
+dev,1419,637,782,242246,62177
+test,710,326,384,122459,30683
