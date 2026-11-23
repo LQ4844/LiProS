@@ -1,9 +1,11 @@
+# Python 3.11. Choose a matching CPU or CUDA PyTorch build first, then install these packages.
+torch>=2.6,<3
 torch-geometric>=2.6,<3
 numpy>=1.26,<3
 scipy>=1.11,<2
 scikit-learn>=1.4,<2
 networkx>=3.2,<4
-regex
+regex==2026.7.10
 vaderSentiment==3.3.2
 transformers>=4.51,<6
-safetensors>=0.4
+safetensors>=0.4  # Loads the default safetensors model weights.
