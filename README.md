@@ -50,6 +50,8 @@ The preprocessor maps `human` to 0 and `bot` to 1, retains directed `follow` and
 
 ## Run on the LLM-rewritten subset
 
+Download the [LLM-rewritten TwiBot-20 dataset v1 (ZIP)](https://github.com/LQ4844/LiProS/releases/download/dataset-v1/LiProS-rewrite-dataset-local.zip). Extract `dataset_rewrite/` from the archive and place it at the repository root as `rewrite-dataset/`, with `train.json`, `dev.json`, and `test.json` directly inside it.
+
 The final snapshot has 7,096 accounts and 310,934 changed bot tweets. The command below keeps the 4,967 / 1,419 / 710 train/dev/test assignment and samples visible labels from train.
 
 ```bash
