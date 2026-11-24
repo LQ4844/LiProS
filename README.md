@@ -134,6 +134,4 @@ The aggregation script reports the mean and sample standard deviation across mat
 
 The MIT license covers original LiProS code and documentation. The third-party notices document code provenance and redistribution status for the encoders, classifier, training workflow, and metric helpers. [LiProS MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
-BotRGCN is a reference for the text and profile streams and the follow graph. [BotRGCN MIT license](LICENSE-BotRGCN.txt)
-
 Graph convolution and attention operators use PyTorch Geometric. Dataset access and redistribution follow the providers' terms. [Dataset setup](#dataset-setup)

@@ -1,9 +1,5 @@
 # Third-party notices
 
-## BotRGCN
-
-BotRGCN is an upstream graph model. The four-stream feature projection in `layers/GNN.py` retains portions of its MIT-licensed implementation, Copyright (c) 2021 wind_binteng. [License text](LICENSE-BotRGCN.txt) · [Upstream repository](https://github.com/BunsenFeng/BotRGCN)
-
 ## Multistream fusion
 
 The multistream fusion code in `layers/GNN.py` includes MIT-licensed material covered by the following copyright and permission notices.
