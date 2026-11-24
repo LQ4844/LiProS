@@ -1,6 +1,6 @@
 # LiProS
 
-LiProS detects social bots with lifecycle features and semi-supervised graph learning. The five input streams are bio embeddings, tweet embeddings, numeric and categorical profile attributes, and 37 auxiliary lifecycle columns. A single attention head and a mean residual fuse the projected inputs before two RGCN passes. Self-training screens predicted labels by confidence, Monte Carlo dropout uncertainty, and agreement with the cluster class.
+LiProS detects social bots with lifecycle features and semi-supervised graph learning. It groups the 41 feature entries in V27 Tables 1–5 into creation, production, dissemination, interaction, and operation. Self-training screens predicted labels by confidence, Monte Carlo dropout uncertainty, and agreement with the cluster class.
 
 ## Install
 
@@ -59,29 +59,40 @@ python -m src.feature_preprocessing --raw-dir rewrite-dataset --output data/twib
 python train.py --data-file data/twibot20_rewrite.pt --use-original-splits --label-rate 90 --mode bo --mc-dropout --seed 0 --split-seed 0 --bo-seed 0 --result-json runs/rewrite-seed0.json
 ```
 
+## Encoders and dropout
+
+Select an encoder with `train.py --encoder`. [Encoder implementations](layers/GNN.py)
+
+| Component | CLI option | Role |
+| --- | --- | --- |
+| `LiProSEncoder` | `--encoder lipros` (default) | Applies attention-based feature fusion and relational graph convolution. |
+| `ESAConsEncoder` | `--encoder esa_cons` | Uses `LiProSEncoder` for classification and `SARGCN` for clustering. `--consist-lambda` weights the loss that aligns their normalized embeddings. |
+| `SARGCN` | `--encoder sargcn` | Concatenates the projected bio, tweet, numeric profile, and categorical profile streams and applies relational graph convolution using edge types. |
+| `FeatureGAT` | `--encoder gat` | Uses the same four profile streams and applies two graph attention layers over the account graph without edge types. |
+
+Set `esa_dropout` with `--dropout` or `--esa-dropout`. The default is `0.4`. [CLI arguments](src/argument.py)
+
 ## Feature mapping and parameters
 
-### Input streams
+### Lifecycle grouping
 
-The paper groups features by five lifecycle stages. The release projects five input streams and combines them with attention and a mean residual.
+V27 Tables 1–5 and Fig. 1(a) organize the features into five groups by behavioral function. The 41 entries comprise 39 scalar features and two text embeddings. [Feature definitions](src/dataset.py)
 
-| Stream | Width | Contents |
+| Lifecycle stage | Entries | Features |
 | --- | ---: | --- |
-| Bio embedding | 768 by default | Table 2 `Desc_Emb`. Pooled vectors from `distilroberta-base`. |
-| Tweet embedding | 768 by default | Table 2 `tweet_Emb`. `roberta-base` token vectors pooled per tweet and then per account. |
-| Numeric profile | 6 | Followers, following, favorites, statuses, screen-name length, and account age. |
-| Categorical profile | 11 | Protected, geo enabled, verified, contributors enabled, translator, translation enabled, background tile, use background image, extended profile, default profile, and default profile image. |
-| Auxiliary lifecycle | **37** | The five groups listed below, concatenated before projection. |
+| Creation | 8 | `screenName_len`, `is_verified`, `is_protected`, `Is_geo_enabled`, `use_customBg`, `bgTile_enabled`, `is_defProfile`, `is_defAvatar` |
+| Production | 8 | `tweet_Emb`, `Desc_Emb`, `tweetLenMax_medRatio`, `emoji_repeatRate`, `emojiType_perTweet`, `topEmoji_ratio`, `emojiAvg_perTweet`, `emojiUse_ratio` |
+| Dissemination | 10 | `senti_consistency`, `senti_volatility`, `senti_complex`, `senti_spanDiff`, `senti_pos`, `senti_neg`, `senti_neu`, `bio_promoWord`, `useURL_ratio`, `bio_hasURL` |
+| Interaction | 8 | `cluster_coef`, `deg_centrality`, `neiBot_ratio`, `neiLabel_ratio`, `follower_cnt`, `follow_cnt`, `like_cnt`, `reply_count` |
+| Operation | 7 | `bioTopic`, `post_frequency`, `totalTweet_cnt`, `is_translator`, `contributor_enabled`, `translation_enabled`, `has_extProfile` |
 
-| Lifecycle group | Width | Auxiliary columns in order |
-| --- | ---: | --- |
-| Creation | 8 | Screen-name length, verified, protected, geo enabled, use background image, background tile, default profile, default profile image |
-| Production | 6 | Maximum-to-median tweet length, emoji repetition rate, mean distinct emoji per tweet, most frequent emoji proportion, mean emoji count, fraction of tweets with emoji |
-| Dissemination | 10 | Adjacent-tweet sentiment consistency, standard deviation of sentiment entropy, mean sentiment entropy, absolute difference of maximum positive and negative sentiment, mean positive, mean negative, mean neutral, promotional terms in bio, tweet URL fraction, bio URL flag |
-| Interaction | 7 | Local clustering, normalized degree, `neiBot_ratio`, `neiLabel_ratio`, followers, following, favorites |
-| Operation | 6 | Statuses per day, status count, translator, contributors enabled, translation enabled, extended profile |
+The dissemination stage uses cosine similarity between adjacent VADER positive, negative, and neutral vectors. `senti_spanDiff` sums the maximum positive and maximum negative scores across an account's tweets.
 
-Manuscript Tables 1–5 list 41 features. The two embeddings use separate streams, and `reply_count` and `bioTopic` are absent from this preprocessor, leaving **8 + 6 + 10 + 7 + 6 = 37** auxiliary columns. Several account attributes also appear in the numeric and categorical streams. The released implementation uses the absolute difference of the positive and negative sentiment peaks.
+Rebuild feature files with `python -m src.feature_preprocessing` to use the v3 feature set. Existing v1/v2 files remain readable.
+
+`reply_count` measures lifetime replies posted by an account. Supply an optional `--reply-counts accounts.csv` with `id,reply_count` columns, matching TwiBot-20 `ID` or Cresci-15 `node.json` account IDs. A CSV entry takes precedence over the account-level `reply_count` and then the profile field of the same name. Observed counts use `log(1 + reply_count)`. Missing counts use `-1`. The preprocessor logs the number of accounts with observed counts. Text-only tweet records provide no lifetime count.
+
+`bioTopic` uses a fixed English keyword vocabulary because V27 leaves the category definitions open. It chooses the category with the most distinct keyword matches after removing URLs and mentions. Ties use category order: technology (2), business (3), sports (4), arts (5), news and politics (6), education and science (7), lifestyle (8). Empty bios map to 0 and unmatched bios to 1.
 
 `neiBot_ratio` divides visible bot neighbors by all visibly labeled neighbors. `neiLabel_ratio` divides visible human neighbors by all distinct neighbors. Both numerators use exclusively the fold's original visible ground-truth training labels. Validation labels, test labels, pseudo-labels, and support labels are excluded. Both columns start at zero in the feature file and are recomputed for each fold.
 
@@ -90,11 +101,11 @@ Manuscript Tables 1–5 list 41 features. The two embeddings use separate stream
 | Parameter | Release value and flag |
 | --- | --- |
 | Projection and hidden size | `--fusion-dim 256`, `--layers '[128, 128]'`. The default shared RGCN performs two passes. |
-| Dropout | `--dropout 0.4`. |
+| Dropout | See [Encoders and dropout](#encoders-and-dropout). |
 | Loss and regularization | Graph and self-loop cross-entropies have equal weight. AdamW uses learning rate 0.001 and `--decay 0.005`. The explicit L2 term λ in the manuscript equation has no separate coefficient in the release. The optional `esa_cons` encoder uses `--consist-lambda 0.1` for its consistency loss. |
 | Stages and epochs | `--stage 8` self-training rounds, `--pretrain_epochs 200` per round, `--epochs 1000` maximum final epochs, `--patience 200` based on validation accuracy. |
 | Clustering | `--num_K 200`, K-means on L2-normalized embeddings with 10 initializations. |
-| Uncertainty | `--mc-dropout` uses 20 stochastic passes. `--kappa-p 4e-8` sets the predicted-class probability standard deviation cutoff. |
+| Uncertainty | `--mc-dropout` uses 20 stochastic passes. The predicted-class probability standard deviation passes at or below `--kappa-p` (default `4e-8`). |
 | Confidence | Single mode defaults to 0.65. BO searches `[0.5, 0.9]` and maximizes validation F1 by default. |
 | BO surrogate | Gaussian process with a constant kernel times Matérn-5/2 plus white noise. Initial length scale 0.1, signal variance 1, noise variance 10⁻⁵. The search evaluates 3 initial and 7 adaptive thresholds, scoring 512 candidates per adaptive iteration by expected improvement. |
 | Epoch selection | Highest validation accuracy plus validation F1. The first epoch wins ties. Attention-score filtering and decision-threshold calibration default to off. |
@@ -121,12 +132,8 @@ The aggregation script reports the mean and sample standard deviation across mat
 
 ## License and acknowledgements
 
-The root MIT license covers original LiProS material. Retained upstream code follows its corresponding license terms. [LiProS MIT license](LICENSE)
+The MIT license covers original LiProS code and documentation. The third-party notices document code provenance and redistribution status for the encoders, classifier, training workflow, and metric helpers. [LiProS MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
-| Upstream | Use in LiProS | License and status |
-| --- | --- | --- |
-| ESA-BotRGCN | Multistream fusion and experimental encoders in `layers/GNN.py`. | MIT, Copyright (c) 2025 filipovicSamuel. [License text](LICENSE-ESA-BotRGCN.txt) · [Paper](https://doi.org/10.3390/s25134179) |
-| BotRGCN | Reference for the text and profile streams and follow graph in `src/feature_preprocessing.py` and `layers/GNN.py`. | MIT, Copyright (c) 2021 wind_binteng. [License text](LICENSE-BotRGCN.txt) · [Upstream license](https://github.com/BunsenFeng/BotRGCN/blob/main/LICENSE) |
-| M3S PyTorch implementation | Multi-stage self-training in `models/lipros.py`, the classifier in `layers/Classifier.py`, SARGCN, RGCN, and HGT in `layers/GNN.py`, and training and metric helpers in `src/utils.py`. | No project license is listed upstream. [Upstream repository](https://github.com/Junseok0207/M3S_Pytorch) · [Paper](https://arxiv.org/abs/1902.11038) |
+BotRGCN is a reference for the text and profile streams and the follow graph. [BotRGCN MIT license](LICENSE-BotRGCN.txt)
 
-GCN, GAT, and HGT operators use PyTorch Geometric. Dataset access and redistribution follow the providers' terms. [Dataset setup](#dataset-setup)
+Graph convolution and attention operators use PyTorch Geometric. Dataset access and redistribution follow the providers' terms. [Dataset setup](#dataset-setup)

@@ -3,13 +3,35 @@ from pathlib import Path
 import torch
 
 
-DATASET_VERSION = 2
+DATASET_VERSION = 3
 LABELED_SPLITS = ("train", "dev", "test")
 UNLABELED = -1
 RELATION_NAMES = ("followings", "followers")
 CRESCI_RELATION_NAMES = ("follow", "friend")
-STATIC_WIDTHS = {"creation": 8, "production": 6, "dissemination": 10,
-                 "interactive": 7, "operational": 6}
+LIFECYCLE_COLUMNS = {
+    "creation": (
+        "screenName_len", "is_verified", "is_protected", "Is_geo_enabled",
+        "use_customBg", "bgTile_enabled", "is_defProfile", "is_defAvatar",
+    ),
+    "production": (
+        "tweetLenMax_medRatio", "emoji_repeatRate", "emojiType_perTweet",
+        "topEmoji_ratio", "emojiAvg_perTweet", "emojiUse_ratio",
+    ),
+    "dissemination": (
+        "senti_consistency", "senti_volatility", "senti_complex", "senti_spanDiff",
+        "senti_pos", "senti_neg", "senti_neu", "bio_promoWord", "useURL_ratio", "bio_hasURL",
+    ),
+    "interactive": (
+        "cluster_coef", "deg_centrality", "neiBot_ratio", "neiLabel_ratio",
+        "follower_cnt", "follow_cnt", "like_cnt", "reply_count",
+    ),
+    "operational": (
+        "bioTopic", "post_frequency", "totalTweet_cnt", "is_translator",
+        "contributor_enabled", "translation_enabled", "has_extProfile",
+    ),
+}
+STATIC_WIDTHS = {name: len(columns) for name, columns in LIFECYCLE_COLUMNS.items()}
+LEGACY_STATIC_WIDTHS = {**STATIC_WIDTHS, "interactive": 7, "operational": 6}
 
 
 def load_dataset(path):
@@ -17,7 +39,8 @@ def load_dataset(path):
     if not path.is_file():
         raise FileNotFoundError(f"Missing {path}. Generate it with python -m src.feature_preprocessing.")
     data = torch.load(path, map_location="cpu", weights_only=True)
-    if data.get("format_version") not in (1, DATASET_VERSION):
+    version = data.get("format_version")
+    if version not in (1, 2, DATASET_VERSION):
         raise ValueError("Unsupported LiProS dataset format. Rebuild it with python -m src.feature_preprocessing.")
 
     labels = data["labels"]
@@ -57,7 +80,8 @@ def load_dataset(path):
     if not set(types.unique().tolist()) <= {0, 1}:
         raise ValueError("Expected edge relation IDs 0 and 1.")
 
-    for name, width in STATIC_WIDTHS.items():
+    widths = STATIC_WIDTHS if version == DATASET_VERSION else LEGACY_STATIC_WIDTHS
+    for name, width in widths.items():
         matrix = data["lifecycle"][name]
         if (matrix.shape != (n, width) or not matrix.is_floating_point()
                 or not torch.isfinite(matrix).all()):

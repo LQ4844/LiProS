@@ -1119,7 +1119,7 @@ class LiProSTrainer(Embedder):
             ])
         confidence, predicted = predictions.mean(dim=0).max(dim=1)
         uncertainty = predictions.std(dim=0).gather(1, predicted[:, None]).squeeze(1)
-        selected = (confidence >= confidence_threshold) & (uncertainty < self.args.kappa_p)
+        selected = (confidence >= confidence_threshold) & (uncertainty <= self.args.kappa_p)
         if self._attn_filter_enabled():
             score = self._compute_attention_score()
             selected &= score >= self.args.attention_threshold

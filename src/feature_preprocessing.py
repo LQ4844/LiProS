@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import math
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -30,6 +31,15 @@ NEIGHBOR_LABEL_COLUMNS = slice(INTERACTION_OFFSET + 2, INTERACTION_OFFSET + 4)
 URL = re.compile(r"(?:https?://|www\.)\S+", re.I)
 PROMO = re.compile(r"\b(?:buy|shop|sale|discount|deal|promo|free|win|giveaway|subscribe|"
                    r"follow\s+me|click\s+here|link\s+in\s+bio)\b", re.I)
+BIO_TOPIC_WORDS = {
+    "technology": {"ai", "coding", "developer", "programmer", "programming", "software", "tech", "technology"},
+    "business": {"business", "entrepreneur", "finance", "investing", "marketing", "startup", "trading"},
+    "sports": {"athlete", "baseball", "basketball", "football", "soccer", "sports", "tennis"},
+    "arts": {"art", "artist", "film", "music", "musician", "photographer", "photography", "poetry"},
+    "news_politics": {"elections", "government", "journalism", "journalist", "news", "politics"},
+    "education_science": {"education", "professor", "research", "researcher", "science", "teacher", "university"},
+    "lifestyle": {"cooking", "fashion", "fitness", "food", "health", "travel", "wellness", "yoga"},
+}
 GRAPHEME = regex.compile(r"\X")
 PICTOGRAPH = regex.compile(r"\p{Extended_Pictographic}")
 SNAPSHOT = datetime(2020, 9, 1, tzinfo=timezone.utc)
@@ -52,6 +62,48 @@ def _number(value):
 
 def _flag(value):
     return float(str(value).strip().lower() in ("true", "1"))
+
+
+def _parse_reply_count(value):
+    try:
+        count = int(str(value).strip())
+    except ValueError:
+        return None
+    return count if count >= 0 else None
+
+
+def read_reply_counts(path):
+    counts = {}
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        rows = csv.DictReader(handle)
+        if not {"id", "reply_count"}.issubset(rows.fieldnames or ()):
+            raise ValueError(f"{path} must have id and reply_count columns.")
+        for row in rows:
+            uid = (row["id"] or "").strip()
+            count = _parse_reply_count(row["reply_count"])
+            if not uid or uid in counts or count is None:
+                raise ValueError(f"{path}:{rows.line_num}: expected a unique id and a nonnegative integer reply_count.")
+            counts[uid] = count
+    return counts
+
+
+def _reply_feature(user, profile, reply_counts):
+    uid = str(user.get("ID", "")).strip()
+    for value in (reply_counts.get(uid), user.get("reply_count"), profile.get("reply_count")):
+        count = _parse_reply_count(value)
+        if count is not None:
+            return math.log(count + 1)
+    return -1.0  # A known zero replies maps to zero under log(1 + count).
+
+
+def _bio_topic(bio):
+    text = bio.casefold().strip()
+    if text in ("", "none", "null", "n/a"):
+        return 0
+    words = set(re.findall(r"[a-z]+", re.sub(r"@\w+", "", URL.sub("", text))))
+    scores = [len(words & keywords) for keywords in BIO_TOPIC_WORDS.values()]
+    highest = max(scores)
+    return 2 + scores.index(highest) if highest else 1
 
 
 def _account_age(value, snapshot):
@@ -78,17 +130,16 @@ def _sentiment(tweets, analyzer):
         return [0.0] * 7
     vectors = np.array([[s["pos"], s["neg"], s["neu"]] for s in scores], dtype=np.float64)
     entropy = -(vectors * np.log(vectors + 1e-12)).sum(axis=1)
-    semantic = np.column_stack((vectors[:, :2], entropy))
-    if len(semantic) > 1:
-        norms = np.linalg.norm(semantic, axis=1)
+    if len(vectors) > 1:
+        norms = np.linalg.norm(vectors, axis=1)
         denom = norms[:-1] * norms[1:]
         valid = denom > 0
-        consistency = float(np.mean(np.sum(semantic[:-1][valid] * semantic[1:][valid], axis=1)
+        consistency = float(np.mean(np.sum(vectors[:-1][valid] * vectors[1:][valid], axis=1)
                                     / denom[valid])) if valid.any() else 0.0
     else:
         consistency = 0.0
     return [consistency, float(entropy.std(ddof=1)) if len(entropy) > 1 else 0.0,
-            float(entropy.mean()), float(abs(vectors[:, 0].max() - vectors[:, 1].max())),
+            float(entropy.mean()), float(vectors[:, 0].max() + vectors[:, 1].max()),
             *vectors.mean(axis=0).tolist()]
 
 
@@ -112,9 +163,11 @@ def _graph_features(edge_index, n_users):
     return cluster, degree / max(n_users - 1, 1)
 
 
-def extract_lifecycle_features(users, edge_index, n_users, snapshot=SNAPSHOT):
+def extract_lifecycle_features(users, edge_index, n_users, snapshot=SNAPSHOT, *, reply_counts=None):
     analyzer = SentimentIntensityAnalyzer()
     rows = {name: [] for name in STAGES}
+    reply_counts = reply_counts or {}
+    replies, bio_topics = [], []
     for user in users:
         profile = user.get("profile") or {}
         tweets = [t for t in (user.get("tweet") or []) if isinstance(t, str)]
@@ -149,8 +202,10 @@ def extract_lifecycle_features(users, edge_index, n_users, snapshot=SNAPSHOT):
         following = _number(profile.get("friends_count"))
         likes = _number(profile.get("favourites_count"))
         rows["interactive"].append([followers, following, likes])
+        replies.append(_reply_feature(user, profile, reply_counts))
         total = _number(profile.get("statuses_count"))
         age_days = max(_account_age(profile.get("created_at"), snapshot), 1)
+        bio_topics.append(_bio_topic(bio))
         rows["operational"].append([
             total / age_days, total,
             *(_flag(profile.get(key)) for key in (
@@ -164,8 +219,10 @@ def extract_lifecycle_features(users, edge_index, n_users, snapshot=SNAPSHOT):
         "production": _standardize(rows["production"]),
         "dissemination": _standardize(rows["dissemination"], count_columns=(7,)),
         "interactive": torch.column_stack((torch.from_numpy(cluster), torch.from_numpy(degree),
-                                             torch.zeros(n_users, 2), interactive)),
-        "operational": _standardize(rows["operational"], count_columns=(0, 1)),
+                                             torch.zeros(n_users, 2), interactive,
+                                             torch.tensor(replies, dtype=torch.float32))),
+        "operational": torch.column_stack((torch.tensor(bio_topics, dtype=torch.float32),
+                                           _standardize(rows["operational"], count_columns=(0, 1)))),
     }
     return stages
 
@@ -302,7 +359,7 @@ def read_cresci15(raw_dir):
     if len(user_ids) != len(user_rows) or user_rows.keys() != labels.keys() or not all(split_sizes.values()):
         raise ValueError("Cresci-15 split.csv must list every labeled account once across nonempty splits.")
 
-    users = [{"label": labels[uid], "tweet": []} for uid in user_ids]
+    users = [{"ID": uid, "label": labels[uid], "tweet": []} for uid in user_ids]
     texts = {}
     print("[data] Reading Cresci-15 node.json", flush=True)
     for node in iter_json_objects(paths["node.json"]):
@@ -484,6 +541,8 @@ def main():
     parser.add_argument("--max-length", type=int, help="Maximum tokens per text (TwiBot-20: 512, Cresci-15: 128).")
     parser.add_argument("--reuse-embeddings", type=Path,
                         help="Optional directory with matching des_tensor.pt, tweets_tensor.pt and label.pt")
+    parser.add_argument("--reply-counts", type=Path, metavar="CSV",
+                        help="Optional CSV of lifetime replies posted by each account (id,reply_count).")
     args = parser.parse_args()
     cresci15 = args.dataset == "cresci-15"
     if args.max_length is None:
@@ -501,6 +560,7 @@ def main():
     if args.num_threads is not None:
         torch.set_num_threads(args.num_threads)
 
+    reply_counts = read_reply_counts(args.reply_counts) if args.reply_counts else None
     if cresci15:
         users, split_sizes, edge_index, edge_type = read_cresci15(args.raw_dir)
         graph_rows = users
@@ -515,7 +575,9 @@ def main():
     numeric, categorical = profile_features(users, snapshot, log_counts=cresci15)
     print(f"[data] {n_users} accounts, {edge_type.numel()} directed edges", flush=True)
     print("[features] Computing lifecycle statistics", flush=True)
-    lifecycle = extract_lifecycle_features(users, edge_index, n_users, snapshot)
+    lifecycle = extract_lifecycle_features(users, edge_index, n_users, snapshot, reply_counts=reply_counts)
+    measured_replies = lifecycle["interactive"][:, -1].ge(0).sum().item()
+    print(f"[features] Lifetime reply counts available for {measured_replies}/{n_users} accounts", flush=True)
     if args.reuse_embeddings:
         description, tweets = reuse_embeddings(args.reuse_embeddings, users, labels)
     else:
