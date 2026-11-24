@@ -18,7 +18,7 @@ In an environment where PyG's dependencies are already installed, `python -m pip
 
 ## Dataset setup
 
-Obtain research access to the full TwiBot-20 account records from the dataset authors and use authorized local copies of the rewritten snapshot. Obtain the Cresci-15 conversion from the TwiBot-22 collection. [TwiBot-20 access](https://github.com/BunsenFeng/TwiBot-20#full-twibot-20-dataset) · [Cresci-15 access](https://github.com/LuoUndergradXJTU/TwiBot-22#how-to-download-other-datasets)
+Obtain research access to the full TwiBot-20 account records from the dataset authors and use local copies of the rewritten snapshot. Obtain the Cresci-15 conversion from the TwiBot-22 collection. [TwiBot-20 access](https://github.com/BunsenFeng/TwiBot-20#full-twibot-20-dataset) · [Cresci-15 access](https://github.com/LuoUndergradXJTU/TwiBot-22#how-to-download-other-datasets)
 
 | Dataset | Input directory | Required files |
 | --- | --- | --- |
@@ -130,8 +130,4 @@ python scripts/aggregate_results.py "runs/twibot20-seed*.json"
 
 The aggregation script reports the mean and sample standard deviation across matched runs.
 
-## License and acknowledgements
 
-The MIT license covers original LiProS code and documentation. The third-party notices document code provenance and redistribution status for the encoders, classifier, training workflow, and metric helpers. [LiProS MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)
-
-Graph convolution and attention operators use PyTorch Geometric. Dataset access and redistribution follow the providers' terms. [Dataset setup](#dataset-setup)
