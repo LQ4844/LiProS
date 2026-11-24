@@ -1,4 +1,4 @@
-# Metric and training helper provenance is listed under License and acknowledgements in README.md.
+# Metric and training helper provenance is listed under Acknowledgements in README.md.
 from contextlib import contextmanager
 import os
 import os.path as osp

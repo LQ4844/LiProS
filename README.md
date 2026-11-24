@@ -70,7 +70,7 @@ Select an encoder with `train.py --encoder`. [Encoder implementations](layers/GN
 | `SARGCN` | `--encoder sargcn` | Concatenates the projected bio, tweet, numeric profile, and categorical profile streams and applies relational graph convolution using edge types. |
 | `FeatureGAT` | `--encoder gat` | Uses the same four profile streams and applies two graph attention layers over the account graph without edge types. |
 
-Set `esa_dropout` with `--dropout` or `--esa-dropout`. The default is `0.4`. [CLI arguments](src/argument.py)
+The default dropout probability is `0.3` for training and for stochastic inference when `--mc-dropout` is enabled. Set it with `--dropout` or `--esa-dropout`. [CLI arguments](src/argument.py)
 
 ## Feature mapping and parameters
 
@@ -103,17 +103,17 @@ Rebuild feature files with `python -m src.feature_preprocessing` to use the v3 f
 | Projection and hidden size | `--fusion-dim 256`, `--layers '[128, 128]'`. The default shared RGCN performs two passes. |
 | Dropout | See [Encoders and dropout](#encoders-and-dropout). |
 | Loss and regularization | Graph and self-loop cross-entropies have equal weight. AdamW uses learning rate 0.001 and `--decay 0.005`. The explicit L2 term λ in the manuscript equation has no separate coefficient in the release. The optional `esa_cons` encoder uses `--consist-lambda 0.1` for its consistency loss. |
-| Stages and epochs | `--stage 8` self-training rounds, `--pretrain_epochs 200` per round, `--epochs 1000` maximum final epochs, `--patience 200` based on validation accuracy. |
+| Stages and epochs | BO defaults to two stages of 50 pretraining epochs and up to 100 final training epochs per fold and trial, with patience 50. The sum of pretraining and final training is capped at 200 epochs per fold and trial. Single mode defaults to eight stages of 200 pretraining epochs and up to 1000 final training epochs, with patience 200. |
 | Clustering | `--num_K 200`, K-means on L2-normalized embeddings with 10 initializations. |
 | Uncertainty | `--mc-dropout` uses 20 stochastic passes. The predicted-class probability standard deviation passes at or below `--kappa-p` (default `4e-8`). |
 | Confidence | Single mode defaults to 0.65. BO searches `[0.5, 0.9]` and maximizes validation F1 by default. |
-| BO surrogate | Gaussian process with a constant kernel times Matérn-5/2 plus white noise. Initial length scale 0.1, signal variance 1, noise variance 10⁻⁵. The search evaluates 3 initial and 7 adaptive thresholds, scoring 512 candidates per adaptive iteration by expected improvement. |
+| BO surrogate | Gaussian process with a constant kernel times Matérn-5/2 plus white noise. Initial length scale 0.1, signal variance 1, noise variance 10⁻⁵. The default search evaluates 3 initial and 2 adaptive thresholds, scoring 512 candidates per adaptive iteration by expected improvement. The evaluation budget is capped at 5. |
 | Epoch selection | Highest validation accuracy plus validation F1. The first epoch wins ties. Attention-score filtering and decision-threshold calibration default to off. |
 
 ## Evaluation and reproducibility
 
 - `--seed` controls model initialization and training randomness. `--split-seed` controls splits or visible training-label sampling. `--bo-seed` controls the Bayesian search. The result JSON records visible split sizes and mask hashes for each fold. The current split generator can produce different masks from earlier releases at the same seed.
-- BO fits a Gaussian-process surrogate with a Matérn-5/2 kernel and white noise. It maximizes expected improvement over 512 sampled candidates per adaptive step and evaluates validation F1 at 3 initial thresholds and 7 adaptive thresholds in `[0.5, 0.9]`.
+- BO fits a Gaussian-process surrogate with a Matérn-5/2 kernel and white noise. It maximizes expected improvement over 512 sampled candidates per adaptive step and evaluates validation F1 at 3 initial thresholds and 2 adaptive thresholds in `[0.5, 0.9]` by default.
 - The CLI selects the earliest epoch with the highest validation F1 plus validation accuracy. Early stopping tracks validation accuracy. Attention-score pseudo-label filtering and per-epoch decision-threshold calibration are off by default because the manuscript describes confidence, uncertainty, and cluster checks with the standard classifier decision. Either optional experiment can be enabled explicitly. Calibration uses the same validation set to fit the threshold and select the epoch.
 - `neiBot_ratio` and `neiLabel_ratio` use only original visible training labels, excluding validation, test, and pseudo-labels.
 - Use `--device -1` for CPU and `--num-threads N` to set PyTorch CPU threads. The CLI's `--deterministic-algorithms` sets a startup `PYTHONHASHSEED` if unset, configures cuBLAS before importing PyTorch, and warns for unsupported deterministic operations. cuDNN benchmarking is disabled.

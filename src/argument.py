@@ -26,7 +26,8 @@ def parse_args():
         help="lipros uses five-stream attention. sargcn uses the original M3S encoder. gcn and gat use four feature streams. dual concatenates two representations. esa_cons uses consistency regularization.",
     )
     
-    parser.add_argument("--epochs", '-e', type=int, default=1000, help="The number of epochs")    
+    parser.add_argument("--epochs", "-e", type=int,
+                        help="Maximum final training epochs (default: 100 in bo mode, 1000 in single mode).")
     parser.add_argument("--lr", '-lr', type=float, default=None, help="Learning rate. Defaults to the selected encoder's recommended value.")
     parser.add_argument("--decay", type=float, default=None, help="Weight decay. Defaults to the selected encoder's recommended value.")
     parser.add_argument(
@@ -36,7 +37,8 @@ def parse_args():
         choices=["auto", "adam", "adamw"],
         help="auto: lipros/dual/esa_cons->adamw, sargcn->adam",
     )
-    parser.add_argument("--patience", type=int, default=200)
+    parser.add_argument("--patience", type=int,
+                        help="Early-stopping patience (default: 50 in bo mode, 200 in single mode).")
     parser.add_argument("--seed", type=int, default=0, help="Global random seed for this run")
     parser.add_argument("--deterministic-algorithms", action="store_true",
                         help="Prefer deterministic PyTorch operations and warn about unsupported GPU operations.")
@@ -59,7 +61,8 @@ def parse_args():
     parser.add_argument("--epoch-csv", help="Optional epoch CSV for pretraining and final training in every fold and trial.")
     parser.add_argument("--checkpoint-dir", help="Optional directory for the selected model weights from each fold and trial.")
         
-    parser.add_argument("--stage", type=int, default=8)
+    parser.add_argument("--stage", type=int,
+                        help="Number of self-training stages (default: 2 in bo mode, 8 in single mode).")
     parser.add_argument("--clustering", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num_K", type=int, default=200)
     parser.add_argument("--device", '-d', type=int, default=0, help="CUDA device index, or -1 for CPU")    
@@ -132,10 +135,12 @@ def parse_args():
 
     parser.add_argument("--relation_select", type=int, choices=(0, 1), default=[0, 1], nargs="+",
                         help="Relation IDs for the heterogeneous graph view (0 and 1, mapped by dataset).")
-    parser.add_argument("--pretrain_epochs", type=int, default=200, help="Epochs of supervised pretrain in each stage")
+    parser.add_argument("--pretrain_epochs", type=int,
+                        help="Pretraining epochs per stage (default: 50 in bo mode, 200 in single mode).")
 
     parser.add_argument("--fusion-dim", type=int, default=256, help="Alignment dimension D for the five feature streams. Paper-style fusion requires D = 256.")
-    parser.add_argument("--dropout", "--esa-dropout", dest="esa_dropout", type=float, default=0.4, help="Dropout between RGCN layers in the ESA encoder")
+    parser.add_argument("--dropout", "--esa-dropout", dest="esa_dropout", type=float, default=0.3,
+                        help="Dropout probability during training and Monte Carlo dropout (default: 0.3).")
     parser.add_argument(
         "--backbone", "--esa-backbone", dest="esa_backbone",
         choices=["shared", "residual"],
@@ -199,7 +204,8 @@ def parse_args():
     parser.add_argument("--bo-lower", type=float, default=0.5, help="Lower confidence threshold bound for Bayesian optimization")
     parser.add_argument("--bo-upper", type=float, default=0.9, help="Upper confidence threshold bound for Bayesian optimization")
     parser.add_argument("--bo-initial-points", type=int, default=3, help="Number of initial evaluations before fitting the Gaussian process")
-    parser.add_argument("--bo-iterations", type=int, default=7, help="Number of adaptive Bayesian optimization iterations")
+    parser.add_argument("--bo-iterations", type=int, default=2,
+                        help="Number of adaptive Bayesian optimization iterations (default: 2).")
     parser.add_argument("--bo-candidates", type=int, default=512, help="Number of random candidates scored by the acquisition function per iteration")
     parser.add_argument("--bo-xi", type=float, default=0.01, help="Exploration parameter for the expected improvement acquisition function")
     parser.add_argument(
@@ -216,6 +222,16 @@ def parse_args():
     )
 
     args = parser.parse_args()
+    bo_mode = args.mode == "bo"
+    if args.epochs is None:
+        args.epochs = 100 if bo_mode else 1000
+    if args.patience is None:
+        args.patience = 50 if bo_mode else 200
+    if args.stage is None:
+        args.stage = 2 if bo_mode else 8
+    if args.pretrain_epochs is None:
+        args.pretrain_epochs = 50 if bo_mode else 200
+
     try:
         args.layers = literal_eval(args.layers)
     except (SyntaxError, ValueError):
@@ -288,6 +304,10 @@ def parse_args():
             "[debug] stage=1 epochs=50 patience=20 num_K=20 "
             "pretrain_epochs=20 bo_initial_points=2 bo_iterations=1 bo_candidates=64"
         )
+    if bo_mode and args.stage * args.pretrain_epochs + args.epochs > 200:
+        parser.error("BO allows at most 200 epochs per fold and trial (--stage × --pretrain_epochs + --epochs).")
+    if bo_mode and args.bo_initial_points + args.bo_iterations > 5:
+        parser.error("BO allows at most 5 evaluations (--bo-initial-points + --bo-iterations).")
     print(
         "[config] encoder={} optimizer={} lr={} decay={} mode={} "
         "uncertainty={} ensemble={} reinit_each_stage={} attn_filter={} γ={}".format(
