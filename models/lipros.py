@@ -808,7 +808,7 @@ class LiProSTrainer(Embedder):
         iterations = (
             iterations
             if iterations is not None
-            else int(getattr(self.args, "bo_iterations", 7))
+            else int(getattr(self.args, "bo_iterations", 2))
         )
         candidate_count = int(getattr(self.args, "bo_candidates", 512))
         xi = float(getattr(self.args, "bo_xi", 0.01))

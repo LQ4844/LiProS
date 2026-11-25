@@ -115,15 +115,15 @@ Rebuild feature files with `python -m src.feature_preprocessing` to use the v3 f
 | Candidate threshold | Self-training stops when the current unlabeled candidate count falls below `--min-unlabeled` (default 1). With clustering enabled, each round also requires at least `--num_K` candidates. Final training runs even when the initial candidate pool is empty. |
 | Final training | Up to 1,000 epochs per fold and trial, with early stopping after 200 epochs without an improvement in validation accuracy (`--patience 200`). |
 | Clustering | `--num_K 200`. K-means fits the L2-normalized embeddings of the current unlabeled candidates with 10 initializations. Class centers are computed from the current training set. |
-| Uncertainty | `--mc-dropout` uses 20 stochastic passes. The predicted-class probability standard deviation passes at or below `--kappa-p` (default `4e-8`). |
+| Uncertainty | `--mc-dropout` uses 20 stochastic passes. The predicted-class probability standard deviation passes at or below `--kappa-p` (default `0.3`). |
 | Confidence | Single mode defaults to 0.65. BO searches `[0.5, 0.9]` and maximizes validation F1 by default. |
-| BO surrogate | Gaussian process with a constant kernel times Matérn-5/2 plus white noise. Initial length scale 0.1, signal variance 1, noise variance 10⁻⁵. The default search evaluates 3 initial and 7 adaptive thresholds, scoring 512 candidates per adaptive iteration by expected improvement. |
+| BO surrogate | Gaussian process with a constant kernel times Matérn-5/2 plus white noise. Initial length scale 0.1, signal variance 1, noise variance 10⁻⁵. The default search evaluates 3 initial and 2 adaptive thresholds, scoring 512 candidates per adaptive iteration by expected improvement. |
 | Epoch selection | Highest validation accuracy plus validation F1. The first epoch wins ties. Attention-score filtering and decision-threshold calibration default to off. |
 
 ## Evaluation and reproducibility
 
 - `--seed` controls model initialization and training randomness. `--split-seed` controls splits or visible training-label sampling. `--bo-seed` controls the Bayesian search. The result JSON records visible split sizes and mask hashes for each fold. The current split generator can produce different masks from earlier releases at the same seed.
-- The BO evaluation budget is set by `--bo-initial-points` and `--bo-iterations`. The defaults give 10 evaluations per run.
+- The BO evaluation budget is set by `--bo-initial-points` and `--bo-iterations`. The defaults give 5 evaluations per run.
 - The CLI selects the earliest epoch with the highest validation F1 plus validation accuracy. Early stopping tracks validation accuracy. Attention-score pseudo-label filtering and per-epoch decision-threshold calibration are off by default because the manuscript describes confidence, uncertainty, and cluster checks with the standard classifier decision. Either optional experiment can be enabled explicitly. Calibration uses the same validation set to fit the threshold and select the epoch.
 - `neiBot_ratio` and `neiLabel_ratio` use only original visible training labels, excluding validation, test, and pseudo-labels.
 - Use `--device -1` for CPU and `--num-threads N` to set PyTorch CPU threads. The CLI's `--deterministic-algorithms` sets a startup `PYTHONHASHSEED` if unset, configures cuBLAS before importing PyTorch, and warns for unsupported deterministic operations. cuDNN benchmarking is disabled.

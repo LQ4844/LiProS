@@ -89,8 +89,8 @@ def parse_args():
     parser.add_argument("--clustering", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num_K", type=int, default=200)
     parser.add_argument("--device", '-d', type=int, default=0, help="CUDA device index, or -1 for CPU")    
-    parser.add_argument("--kappa-p", default=4e-8, type=float,
-                        help="Maximum predicted-class probability standard deviation for a pseudo-label.")
+    parser.add_argument("--kappa-p", default=0.3, type=float,
+                        help="Maximum predicted-class probability standard deviation for a pseudo-label (default: %(default)s).")
     parser.add_argument(
         "--mc-dropout",
         action="store_true",
@@ -227,8 +227,8 @@ def parse_args():
     parser.add_argument("--bo-lower", type=float, default=0.5, help="Lower confidence threshold bound for Bayesian optimization")
     parser.add_argument("--bo-upper", type=float, default=0.9, help="Upper confidence threshold bound for Bayesian optimization")
     parser.add_argument("--bo-initial-points", type=int, default=3, help="Number of initial evaluations before fitting the Gaussian process")
-    parser.add_argument("--bo-iterations", type=int, default=7,
-                        help="Number of adaptive Bayesian optimization iterations (default: 7).")
+    parser.add_argument("--bo-iterations", type=int, default=2,
+                        help="Number of adaptive Bayesian optimization iterations (default: %(default)s).")
     parser.add_argument("--bo-candidates", type=int, default=512, help="Number of random candidates scored by the acquisition function per iteration")
     parser.add_argument("--bo-xi", type=float, default=0.01, help="Exploration parameter for the expected improvement acquisition function")
     parser.add_argument(
