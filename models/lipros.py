@@ -1,4 +1,4 @@
-# Multi-stage training provenance is listed under License and acknowledgements in README.md.
+# Multi-stage training provenance is listed under Acknowledgements in README.md.
 from collections import namedtuple
 from pathlib import Path
 import gc
@@ -461,13 +461,13 @@ class LiProSTrainer(Embedder):
                     kind,
                     ",".join(member_labels),
                     ",".join(str(s) for s in member_seeds),
-                    getattr(self.args, "ensemble_reinit_each_stage", True),
+                    getattr(self.args, "ensemble_reinit_each_stage", False),
                     optim_desc,
                 )
             )
 
     def _maybe_init_ensemble_models(self, stage):
-        reinit = bool(getattr(self.args, "ensemble_reinit_each_stage", True))
+        reinit = bool(getattr(self.args, "ensemble_reinit_each_stage", False))
         need = (
             (not hasattr(self, "models"))
             or (self.models is None)
@@ -499,7 +499,16 @@ class LiProSTrainer(Embedder):
             self.edge_index, self.edge_type, new_feature=self.new_feature,
         )
 
+    def _l2_penalty(self, model):
+        coefficient = getattr(self.args, "l2_lambda", 1e-5)
+        if coefficient == 0:
+            return None
+        return coefficient * sum(
+            parameter.square().sum() for parameter in model.parameters() if parameter.requires_grad
+        )
+
     def _loss_for_model(self, model, edge_index, edge_type):
+        cons = None
         if getattr(model, "consist_space", False):
             logits, z_esa, z_graph = model.forward_with_reps(
                 self.des, self.tweet, self.num, self.cat,
@@ -509,23 +518,23 @@ class LiProSTrainer(Embedder):
                 self.des, self.tweet, self.num, self.cat,
                 self.cnn_edge_index, self.cnn_edge_type, new_feature=self.new_feature,
             )
-            ce = (
-                F.cross_entropy(logits[self.running_train_mask], self.labels[self.running_train_mask])
-                + F.cross_entropy(logits_cnn[self.running_train_mask], self.labels[self.running_train_mask])
-            )
             cons = 0.5 * (
                 F.mse_loss(F.normalize(z_esa, dim=1), F.normalize(z_graph, dim=1))
                 + F.mse_loss(F.normalize(z_esa_cnn, dim=1), F.normalize(z_graph_cnn, dim=1))
             )
-            lam = float(getattr(self.args, "consist_lambda", 0.1))
-            return ce + lam * cons, ce.detach(), cons.detach()
-        logits = self._logits_for(model, edge_index, edge_type)
-        logits_cnn = self._logits_for(model, self.cnn_edge_index, self.cnn_edge_type)
-        ce = (
-            F.cross_entropy(logits[self.running_train_mask], self.labels[self.running_train_mask])
-            + F.cross_entropy(logits_cnn[self.running_train_mask], self.labels[self.running_train_mask])
-        )
-        return ce, ce.detach(), None
+        else:
+            logits = self._logits_for(model, edge_index, edge_type)
+            logits_cnn = self._logits_for(model, self.cnn_edge_index, self.cnn_edge_type)
+        mask = self.running_train_mask
+        targets = self.labels[mask]
+        ce = F.cross_entropy(logits[mask], targets) + F.cross_entropy(logits_cnn[mask], targets)
+        loss = ce
+        if cons is not None:
+            loss = loss + float(getattr(self.args, "consist_lambda", 0.1)) * cons
+        penalty = self._l2_penalty(model)
+        if penalty is not None:
+            loss = loss + penalty
+        return loss, ce.detach(), None if cons is None else cons.detach()
 
     def _supervised_loss(self, edge_index, edge_type):
         return self._loss_for_model(self.model, edge_index, edge_type)
@@ -555,7 +564,13 @@ class LiProSTrainer(Embedder):
             if cons_det is not None:
                 consistencies.append(float(cons_det))
 
+        shared_regularization = 0.0
         if getattr(self, "shared_projector_optimizer", None) is not None:
+            # Ensemble members keep the shared projector outside their parameter lists.
+            penalty = self._l2_penalty(self.shared_input_projector)
+            if penalty is not None:
+                penalty.backward()
+                shared_regularization = float(penalty.detach())
             self.shared_projector_optimizer.step()
 
         if getattr(self, "attn_filter_model", None) is not None:
@@ -567,7 +582,7 @@ class LiProSTrainer(Embedder):
             attn_loss.backward()
             self.attn_filter_optimizer.step()
         return (
-            float(np.mean(losses)),
+            (sum(losses) + shared_regularization) / len(losses),
             float(np.mean(ces)),
             float(np.mean(consistencies)) if consistencies else None,
         )
@@ -645,21 +660,18 @@ class LiProSTrainer(Embedder):
     def _cluster_pseudo_labels(self):
         with inference_mode(self.model):
             representations = F.normalize(self._representation(), dim=1).cpu().numpy()
-        clustering = KMeans(n_clusters=self.args.num_K, n_init=10).fit(representations)
-        cluster_ids = clustering.predict(representations)
+        candidates = self._unlabeled_candidates().cpu().numpy()
+        clustering = KMeans(n_clusters=self.args.num_K, n_init=10).fit(representations[candidates])
         classes = self.labels.cpu().numpy()
         known = self.running_train_mask.cpu().numpy()
         centroids = np.stack([
             representations[known & (classes == label)].mean(axis=0)
             for label in range(self.num_classes)
         ])
-        candidates = self._unlabeled_candidates().cpu().numpy()
-        pseudo_labels = np.full_like(cluster_ids, -1)
-        for cluster_id in np.unique(cluster_ids[candidates]):
-            members = (cluster_ids == cluster_id) & candidates
-            centroid = representations[members].mean(axis=0)
-            distance = np.square(centroids - centroid).sum(axis=1)
-            pseudo_labels[members] = distance.argmin()
+        distances = np.square(clustering.cluster_centers_[:, None] - centroids).sum(axis=2)
+        cluster_classes = distances.argmin(axis=1)
+        pseudo_labels = np.full(representations.shape[0], -1, dtype=np.int64)
+        pseudo_labels[candidates] = cluster_classes[clustering.labels_]
         return pseudo_labels
 
     def pretrain(self, mask, stage,confidece_threshold):
@@ -702,6 +714,8 @@ class LiProSTrainer(Embedder):
         checkpoint_dir = getattr(self.args, "checkpoint_dir", None)
         write_epochs = bool(getattr(self.args, "epoch_csv", None))
         status = ""
+        min_candidates = max(getattr(self.args, "min_unlabeled", 1),
+                             self.args.num_K if self.args.clustering else 1)
         logger.info("[run] confidence_threshold = {:.6f}".format(float(confidece_threshold)))
         if getattr(self.args, "use_attention_filter", False):
             logger.info(
@@ -722,20 +736,30 @@ class LiProSTrainer(Embedder):
             fold_seed = run_seed + fold
             set_random_seeds(fold_seed)
             self.train_mask, self.val_mask, self.test_mask = self.split_masks[fold].to(self.device)
+            self.pseudo_label_scope = self.pseudo_label_scopes[fold]
             neighbor_features = compute_neighbor_label_features(self.edge_index, self.y, self.train_mask)
             self.new_feature[:, NEIGHBOR_LABEL_COLUMNS] = neighbor_features.to(self.device)
             logger.info(f"[features] Fold {fold + 1} uses only {int(self.train_mask.sum().item())} "
                   "training nodes for neighbor label features")
             self._init_dataset()
 
+            stage_seed_base = run_seed * 1000000 + fold * 100000
+            self._ensemble_seed_base = stage_seed_base
+            self._init_model()
             for stage in range(self.args.stage):
-                self._ensemble_seed_base = run_seed * 1000000 + fold * 100000 + stage * 10000
-                self._maybe_init_ensemble_models(stage)
-                self.pretrain(fold, stage,confidece_threshold)
+                candidates = int(self._unlabeled_candidates().sum().item())
+                if candidates < min_candidates:
+                    logger.info("[self-training] Fold %d stopped after %d rounds: %d candidates, minimum %d.",
+                                fold + 1, stage, candidates, min_candidates)
+                    break
+                if stage > 0:
+                    self._ensemble_seed_base = stage_seed_base + stage * 10000
+                    self._maybe_init_ensemble_models(stage)
+                self.pretrain(fold, stage, confidece_threshold)
                 self._clear_cuda()
 
             if getattr(self.args, "reinit_final", False):
-                self._ensemble_seed_base = run_seed * 1000000 + fold * 100000 + self.args.stage * 10000
+                self._ensemble_seed_base = stage_seed_base + self.args.stage * 10000
                 self._init_model()
                 logger.info("[run] reinit_final: Training from scratch on the final labeled set of {} nodes".format(
                     int(self.running_train_mask.sum().item())

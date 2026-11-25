@@ -42,19 +42,52 @@ def create_masks(labels, label_rate, rng, folds=1, original_sizes=None):
     return torch.from_numpy(mask)
 
 
-def prepare_training_splits(dataset, args):
-    labels = dataset["labels"]
-    original_sizes = None
+def resolve_split_mode(dataset, args):
     if getattr(args, "use_original_splits", False):
+        return "official"
+    mode = getattr(args, "split_mode", "auto")
+    if mode != "auto":
+        return mode
+    if dataset.get("dataset") == "cresci-15" and dataset.get("split_sizes") is not None:
+        return "official"
+    return "random"
+
+
+def holdout_support_labels(dataset, args):
+    """Hide a fixed set of labels across folds and training seeds."""
+    labels = dataset["labels"]
+    count = getattr(args, "holdout_support", 0)
+    if count == 0:
+        return labels
+    if resolve_split_mode(dataset, args) != "random":
+        raise ValueError("--holdout-support requires random splits.")
+
+    eligible = labels.ne(UNLABELED).nonzero(as_tuple=True)[0].cpu().numpy()
+    if not 0 < count < eligible.size:
+        raise ValueError("--holdout-support must leave labeled accounts for train, dev, and test.")
+    rng = np.random.default_rng([getattr(args, "split_seed", 0), 1])
+    support = rng.choice(eligible, size=count, replace=False)
+    labels = labels.clone()
+    labels[support] = UNLABELED
+    if not (labels.eq(0).any() and labels.eq(1).any()):
+        raise ValueError("--holdout-support must leave labeled accounts in both classes.")
+    return labels
+
+
+def prepare_training_splits(dataset, args, *, labels=None):
+    """Return the split masks and a pseudo-label scope for each fold."""
+    original_sizes = None
+    if resolve_split_mode(dataset, args) == "official":
         original_sizes = dataset.get("split_sizes")
         if original_sizes is None:
-            raise ValueError("--use-original-splits requires split metadata. Rebuild the feature file.")
+            raise ValueError("--split-mode official requires split metadata. Rebuild the feature file.")
     masks = create_masks(
-        labels, args.label_rate, np.random.default_rng(getattr(args, "split_seed", 0)),
+        dataset["labels"] if labels is None else labels,
+        args.label_rate, np.random.default_rng(getattr(args, "split_seed", 0)),
         folds=args.folds, original_sizes=original_sizes,
     )
-    pseudo_label_scope = torch.ones_like(labels, dtype=torch.bool)
-    if original_sizes is not None:
-        end = sum(original_sizes[split] for split in LABELED_SPLITS)
-        pseudo_label_scope[original_sizes["train"]:end] = False
-    return masks, pseudo_label_scope
+    if getattr(args, "pseudo_pool", "vu") == "vu":
+        pseudo_label_scopes = ~(masks[:, 1] | masks[:, 2])
+    else:
+        pseudo_label_scopes = torch.ones_like(masks[:, 0])
+    return masks, pseudo_label_scopes

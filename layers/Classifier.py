@@ -1,4 +1,4 @@
-# Classifier provenance is listed under License and acknowledgements in README.md.
+# Classifier provenance is listed under Acknowledgements in README.md.
 import torch.nn as nn
 import torch
 

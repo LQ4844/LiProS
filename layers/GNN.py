@@ -1,5 +1,5 @@
-# ESA-BotRGCN-derived fusion code: Copyright (c) 2025 filipovicSamuel (MIT).
-# M3S-derived encoder sources are listed under License and acknowledgements in README.md.
+# Fusion code derived from filipovicSamuel's ESA-BotRGCN implementation.
+# M3S-derived encoder sources are listed under Acknowledgements in README.md.
 from typing import List
 
 import torch
@@ -332,7 +332,7 @@ class LiProSEncoder(nn.Module):
         common_dim=256,
         embedding_dimension=128,
         num_relations=2,
-        dropout=0.3,
+        dropout=0.4,
         paper_fusion=True,
         use_residual_fusion=True,
         backbone="shared",

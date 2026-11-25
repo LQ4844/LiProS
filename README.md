@@ -32,10 +32,14 @@ Create `data/raw/` if you use that location for TwiBot-20. All three commands ac
 
 ```bash
 python -m src.feature_preprocessing --raw-dir data/raw --include-support --output data/twibot20.pt
-python train.py --data-file data/twibot20.pt --use-original-splits --label-rate 90 --mode bo --mc-dropout --seed 0 --split-seed 0 --bo-seed 0 --result-json runs/twibot20-seed0.json
+python train.py --data-file data/twibot20.pt --split-mode random --pseudo-pool vu --label-rate 90 --mode bo --mc-dropout --seed 0 --split-seed 0 --bo-seed 0 --result-json runs/twibot20-seed0.json
 ```
 
-`--use-original-splits` keeps the original dev and test splits and samples visible labels within each class in the original training split. The remaining training accounts and support accounts are eligible for pseudo-labels. The fixed dev and test accounts stay in the graph for message passing and evaluation. Omitting the switch produces a different split and a transductive candidate pool that can include validation and test nodes.
+`--split-mode random` follows Section 4.1 of the paper. It samples the specified percentage from all labeled nodes as visible training labels and rounds the training count down. It assigns 10% of the remaining labeled nodes to validation, rounded down, and the rest to testing. At a 90% label rate, TwiBot-20 has 10,643 visible training nodes, 118 validation nodes, and 1,065 test nodes. Unlabeled support nodes stay in the graph and are eligible for pseudo-labeling.
+
+`--split-mode auto` is the default and selects `random` for TwiBot-20. `--split-mode official` keeps the original dev and test splits and samples visible labels by class within the original training split. `--use-original-splits` is an alias for `--split-mode official`.
+
+`--pseudo-pool vu` is the default and excludes the current fold's validation and test nodes from pseudo-labeling. Those nodes stay in the graph for message passing and evaluation. If the three splits cover every node, the initial candidate pool is empty. `--pseudo-pool all` also allows validation and test nodes to become candidates.
 
 ## Run on Cresci-15
 
@@ -43,10 +47,14 @@ Obtain the converted `cresci-2015` dataset in TwiBot-22 format. Pass the existin
 
 ```bash
 python -m src.feature_preprocessing --dataset cresci-15 --raw-dir "/path/to/cresci-2015" --output data/cresci15.pt
-python train.py --data-file data/cresci15.pt --use-original-splits --label-rate 90 --mode bo --mc-dropout --seed 0 --split-seed 0 --bo-seed 0 --result-json runs/cresci15-seed0.json
+python train.py --data-file data/cresci15.pt --split-mode random --holdout-support 530 --pseudo-pool vu --label-rate 90 --mode bo --mc-dropout --seed 0 --split-seed 0 --bo-seed 0 --result-json runs/cresci15-seed0.json
 ```
 
-The preprocessor maps `human` to 0 and `bot` to 1, retains directed `follow` and `friend` account edges as types 0 and 1, and uses up to 20 nonempty tweets per account in the order of the `post` records. The default embedding limit is 128 tokens per text. With `--use-original-splits`, training uses the splits in `split.csv` and samples visible labels within the original training split. The reference copy contains 3,708 training, 1,058 validation, and 535 test accounts.
+The preprocessor maps `human` to 0 and `bot` to 1, retains directed `follow` and `friend` account edges as types 0 and 1, and uses up to 20 nonempty tweets per account in the order of the `post` records. The default embedding limit is 128 tokens per text.
+
+The Cresci-15 conversion has labels for every account. Following the TwiBot-20 protocol, the command uses a separate support pool. It reserves 530 accounts at random using `--split-seed` and hides their labels at training time. These accounts stay in the graph and are eligible for pseudo-labeling. The random split applies the 90% label rate to the remaining 4,771 accounts, giving 4,293 visible training, 47 validation, and 431 test accounts. The same feature file can be used for runs with or without held-out support.
+
+For the fixed splits from `split.csv`, omit `--holdout-support` and pass `--split-mode official`. The default `auto` mode also selects `official` for Cresci-15 with split metadata. The reference copy contains 3,708 training, 1,058 validation, and 535 test accounts.
 
 ## Run on the LLM-rewritten subset
 
@@ -56,7 +64,7 @@ The final snapshot has 7,096 accounts and 310,934 changed bot tweets. The comman
 
 ```bash
 python -m src.feature_preprocessing --raw-dir rewrite-dataset --output data/twibot20_rewrite.pt
-python train.py --data-file data/twibot20_rewrite.pt --use-original-splits --label-rate 90 --mode bo --mc-dropout --seed 0 --split-seed 0 --bo-seed 0 --result-json runs/rewrite-seed0.json
+python train.py --data-file data/twibot20_rewrite.pt --split-mode official --pseudo-pool vu --label-rate 90 --mode bo --mc-dropout --seed 0 --split-seed 0 --bo-seed 0 --result-json runs/rewrite-seed0.json
 ```
 
 ## Encoders and dropout
@@ -70,7 +78,7 @@ Select an encoder with `train.py --encoder`. [Encoder implementations](layers/GN
 | `SARGCN` | `--encoder sargcn` | Concatenates the projected bio, tweet, numeric profile, and categorical profile streams and applies relational graph convolution using edge types. |
 | `FeatureGAT` | `--encoder gat` | Uses the same four profile streams and applies two graph attention layers over the account graph without edge types. |
 
-The default dropout probability is `0.3` for training and for stochastic inference when `--mc-dropout` is enabled. Set it with `--dropout` or `--esa-dropout`. [CLI arguments](src/argument.py)
+The default dropout probability is `0.4` for training and for stochastic inference when `--mc-dropout` is enabled. Set it with `--dropout` or `--esa-dropout`. [CLI arguments](src/argument.py)
 
 ## Feature mapping and parameters
 
@@ -102,18 +110,20 @@ Rebuild feature files with `python -m src.feature_preprocessing` to use the v3 f
 | --- | --- |
 | Projection and hidden size | `--fusion-dim 256`, `--layers '[128, 128]'`. The default shared RGCN performs two passes. |
 | Dropout | See [Encoders and dropout](#encoders-and-dropout). |
-| Loss and regularization | Graph and self-loop cross-entropies have equal weight. AdamW uses learning rate 0.001 and `--decay 0.005`. The explicit L2 term λ in the manuscript equation has no separate coefficient in the release. The optional `esa_cons` encoder uses `--consist-lambda 0.1` for its consistency loss. |
-| Stages and epochs | BO defaults to two stages of 50 pretraining epochs and up to 100 final training epochs per fold and trial, with patience 50. The sum of pretraining and final training is capped at 200 epochs per fold and trial. Single mode defaults to eight stages of 200 pretraining epochs and up to 1000 final training epochs, with patience 200. |
-| Clustering | `--num_K 200`, K-means on L2-normalized embeddings with 10 initializations. |
+| Loss and regularization | Graph and self-loop cross-entropies have equal weight. The loss adds the sum of squared model parameters scaled by `--l2-lambda 1e-5`. AdamW separately uses learning rate 0.001 and weight decay `--decay 0.005`. The optional `esa_cons` encoder uses `--consist-lambda 0.1` for its consistency loss. |
+| Self-training budget | Both modes default to up to 200 rounds (`--stage 200`) of 200 pretraining epochs each (`--pretrain_epochs 200`). Model training continues between rounds by default. Pass `--ensemble-reinit-each-stage` to reinitialize the model between rounds. |
+| Candidate threshold | Self-training stops when the current unlabeled candidate count falls below `--min-unlabeled` (default 1). With clustering enabled, each round also requires at least `--num_K` candidates. Final training runs even when the initial candidate pool is empty. |
+| Final training | Up to 1,000 epochs per fold and trial, with early stopping after 200 epochs without an improvement in validation accuracy (`--patience 200`). |
+| Clustering | `--num_K 200`. K-means fits the L2-normalized embeddings of the current unlabeled candidates with 10 initializations. Class centers are computed from the current training set. |
 | Uncertainty | `--mc-dropout` uses 20 stochastic passes. The predicted-class probability standard deviation passes at or below `--kappa-p` (default `4e-8`). |
 | Confidence | Single mode defaults to 0.65. BO searches `[0.5, 0.9]` and maximizes validation F1 by default. |
-| BO surrogate | Gaussian process with a constant kernel times Matérn-5/2 plus white noise. Initial length scale 0.1, signal variance 1, noise variance 10⁻⁵. The default search evaluates 3 initial and 2 adaptive thresholds, scoring 512 candidates per adaptive iteration by expected improvement. The evaluation budget is capped at 5. |
+| BO surrogate | Gaussian process with a constant kernel times Matérn-5/2 plus white noise. Initial length scale 0.1, signal variance 1, noise variance 10⁻⁵. The default search evaluates 3 initial and 7 adaptive thresholds, scoring 512 candidates per adaptive iteration by expected improvement. |
 | Epoch selection | Highest validation accuracy plus validation F1. The first epoch wins ties. Attention-score filtering and decision-threshold calibration default to off. |
 
 ## Evaluation and reproducibility
 
 - `--seed` controls model initialization and training randomness. `--split-seed` controls splits or visible training-label sampling. `--bo-seed` controls the Bayesian search. The result JSON records visible split sizes and mask hashes for each fold. The current split generator can produce different masks from earlier releases at the same seed.
-- BO fits a Gaussian-process surrogate with a Matérn-5/2 kernel and white noise. It maximizes expected improvement over 512 sampled candidates per adaptive step and evaluates validation F1 at 3 initial thresholds and 2 adaptive thresholds in `[0.5, 0.9]` by default.
+- The BO evaluation budget is set by `--bo-initial-points` and `--bo-iterations`. The defaults give 10 evaluations per run.
 - The CLI selects the earliest epoch with the highest validation F1 plus validation accuracy. Early stopping tracks validation accuracy. Attention-score pseudo-label filtering and per-epoch decision-threshold calibration are off by default because the manuscript describes confidence, uncertainty, and cluster checks with the standard classifier decision. Either optional experiment can be enabled explicitly. Calibration uses the same validation set to fit the threshold and select the epoch.
 - `neiBot_ratio` and `neiLabel_ratio` use only original visible training labels, excluding validation, test, and pseudo-labels.
 - Use `--device -1` for CPU and `--num-threads N` to set PyTorch CPU threads. The CLI's `--deterministic-algorithms` sets a startup `PYTHONHASHSEED` if unset, configures cuBLAS before importing PyTorch, and warns for unsupported deterministic operations. cuDNN benchmarking is disabled.
@@ -123,7 +133,7 @@ For five independent training runs with a fixed split and BO seed, use model see
 
 ```bash
 for seed in 0 1 2 3 4; do
-  python train.py --data-file data/twibot20.pt --use-original-splits --label-rate 90 --mode bo --mc-dropout --seed "$seed" --split-seed 0 --bo-seed 0 --result-json "runs/twibot20-seed${seed}.json"
+  python train.py --data-file data/twibot20.pt --split-mode random --pseudo-pool vu --label-rate 90 --mode bo --mc-dropout --seed "$seed" --split-seed 0 --bo-seed 0 --result-json "runs/twibot20-seed${seed}.json"
 done
 python scripts/aggregate_results.py "runs/twibot20-seed*.json"
 ```

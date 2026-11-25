@@ -4,7 +4,7 @@ import logging
 import torch
 
 from layers.factory import build_encoder
-from src.data import prepare_training_splits
+from src.data import holdout_support_labels, prepare_training_splits, resolve_split_mode
 from src.dataset import CRESCI_RELATION_NAMES, RELATION_NAMES, UNLABELED, load_dataset
 from src.feature_preprocessing import combine_auxiliary_features
 from src.utils import config2string
@@ -103,12 +103,10 @@ class Embedder:
         self.relation_names = (
             CRESCI_RELATION_NAMES if dataset.get("dataset") == "cresci-15" else RELATION_NAMES
         )
-        labels = dataset["labels"]
-        self.split_masks, scope = prepare_training_splits(dataset, args)
-        self.pseudo_label_scope = scope.to(self.device)
+        labels = holdout_support_labels(dataset, args)
+        self.split_masks, scopes = prepare_training_splits(dataset, args, labels=labels)
+        self.pseudo_label_scopes = scopes.to(self.device)
         self.num_nodes = labels.numel()
-        if args.clustering and args.num_K > self.num_nodes:
-            raise ValueError(f"Number of clusters ({args.num_K}) exceeds {self.num_nodes} accounts.")
         self.des, self.tweet, self.num, self.cat = (
             dataset[name].to(self.device) for name in ("description", "tweets", "numeric", "categorical")
         )
@@ -125,12 +123,19 @@ class Embedder:
             "name": dataset.get("dataset"),
             "format_version": dataset["format_version"],
             "source_split_sizes": dataset.get("split_sizes"),
+            "split_mode": resolve_split_mode(dataset, args),
             "nodes": self.num_nodes,
             "unlabeled_nodes": int(labels.eq(UNLABELED).sum()),
             "directed_edges": self.edge_type.numel(),
         }
         logger.info("[data] %s accounts (%s unlabeled), %s directed edges",
                     self.num_nodes, self.dataset_metadata["unlabeled_nodes"], self.edge_type.numel())
+        logger.info("[data] split=%s | label_rate=%g%% | pseudo_pool=%s",
+                    self.dataset_metadata["split_mode"], args.label_rate, getattr(args, "pseudo_pool", "vu"))
+        for fold, ((train, dev, test), scope) in enumerate(zip(self.split_masks, scopes, strict=True), 1):
+            logger.info("[split] fold %d | train=%d dev=%d test=%d | initial pseudo-label candidates=%d",
+                        fold, train.sum().item(), dev.sum().item(), test.sum().item(),
+                        (scope & ~train).sum().item())
 
     @property
     def new_edge_index(self):
